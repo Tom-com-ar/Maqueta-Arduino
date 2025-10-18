@@ -18,6 +18,8 @@
 #include <Arduino.h>
 #include <Servo.h>
 #include <DHT.h>
+#include <Wire.h>
+#include <Adafruit_INA219.h>
 
 // --- Hardware pins ---
 const int RELAY1_PIN = 10; // luminaria A
@@ -81,7 +83,7 @@ const uint8_t STEPSEQ[8][4] = {
 };
 int stepIdx = 0;
 unsigned long lastStepMs = 0;
-int stepDelayMs = 7; // velocidad base
+unsigned long stepDelayMs = 7; // velocidad base
 
 // --- Buttons debounce ---
 unsigned long lastDebounceF = 0, lastDebounceB = 0;
@@ -98,6 +100,16 @@ const unsigned long MQ_INTERVAL_MS = 1000;
 unsigned long fanLastToggleMs = 0;
 const unsigned long FAN_TOGGLE_MS = 400;
 bool fanPos = false; // toggle state for servo positions
+
+// --- INA219 (power monitoring) ---
+Adafruit_INA219 ina219;
+unsigned long lastInaMs = 0;
+const unsigned long INA_INTERVAL_MS = 1000; // read every 1s
+float inaBusV = 0.0f;
+float inaCurrent_mA = 0.0f;
+float inaPower_mW = 0.0f;
+double energy_mWh = 0.0; // accumulated milliwatt-hours
+bool inaInitialized = false;
 
 // --- Helpers ---
 void writeStepper(int idx){
@@ -134,6 +146,16 @@ void setup(){
   pinMode(MQ1_PIN, INPUT); pinMode(MQ2_PIN, INPUT);
 
   dht.begin();
+
+  // init INA219
+  if (!ina219.begin()){
+    Serial.println("INA219 not found. Check wiring.");
+  } else {
+    Serial.println("INA219 initialized");
+    inaInitialized = true;
+    // optional calibration depending on expected current range
+    // ina219.setCalibration_32V_2A();
+  }
 
   fanServo.attach(SERVO_PIN);
   fanServo.write(90); // neutral
@@ -187,6 +209,26 @@ void loop(){
     else { Serial.print("DHT T:"); Serial.print(t); Serial.print(" H:"); Serial.println(h); }
   }
 
+  // INA219 periodic reading (every INA_INTERVAL_MS)
+  if (now - lastInaMs >= INA_INTERVAL_MS){
+    lastInaMs = now;
+    if (inaInitialized){
+      inaBusV = ina219.getBusVoltage_V();
+      inaCurrent_mA = ina219.getCurrent_mA();
+      inaPower_mW = ina219.getPower_mW();
+      // accumulate energy (milliwatt * hours). dt in hours = dt_ms / (1000*3600)
+      if (relayState2){ // only accumulate when motor power is enabled
+        double dt_h = (double)INA_INTERVAL_MS / (1000.0 * 3600.0);
+        energy_mWh += (double)inaPower_mW * dt_h;
+      }
+      // Auto-print the INA219 readings so they are constant/automatic
+      Serial.print("INA V="); Serial.print(inaBusV); Serial.print("V ");
+      Serial.print("I="); Serial.print(inaCurrent_mA); Serial.print("mA ");
+      Serial.print("P="); Serial.print(inaPower_mW); Serial.print("mW ");
+      Serial.print("E="); Serial.print(energy_mWh); Serial.println("mWh");
+    }
+  }
+
   // non-blocking fan servo movement
   if (fanActive){
     if (now - fanLastToggleMs >= FAN_TOGGLE_MS){
@@ -226,6 +268,7 @@ void loop(){
       Serial.print("Relay1:"); Serial.print(digitalRead(RELAY1_PIN)); Serial.print(" Relay2:"); Serial.print(digitalRead(RELAY2_PIN));
       Serial.print(" MQ1:"); Serial.print(mq1Avg); Serial.print(" MQ2:"); Serial.print(mq2Avg);
       Serial.print(" fan:"); Serial.println(fanActive);
+      Serial.print(" V:"); Serial.print(inaBusV); Serial.print("V I:"); Serial.print(inaCurrent_mA); Serial.print("mA P:"); Serial.print(inaPower_mW); Serial.print("mW E:"); Serial.print(energy_mWh); Serial.println("mWh");
     }
   }
 }
