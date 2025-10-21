@@ -1,9 +1,9 @@
 /*
-  Maqueta control
-  - 3 relés (IN1=D10, IN2=D11, IN3=D12)
-  - Stepper 28BYJ-48 con ULN2003, inputs D4..D7
+  Maqueta control extendida
+  - 4 relés (IN1=D10, IN2=D11, IN3=D12, IN4=D13)
+  - Stepper 28BYJ-48 con ULN2003 (D4..D7)
   - 2 pulsadores: D2 = forward, D3 = back
-  - Servo en D9
+  - Servo en D9 (controlado por el relé 4)
   - DHT22 en D8
   - MQ135 sensores en A0 y A1
   - INA219 medición de corriente
@@ -18,7 +18,8 @@
 // --- Pines ---
 const int RELAY1_PIN = 10; // luminaria A
 const int RELAY2_PIN = 11; // luminaria B
-const int RELAY3_PIN = 12; // motor paso a paso (IN2 del módulo de relés)
+const int RELAY3_PIN = 12; // motor paso a paso
+const int RELAY4_PIN = 13; // servo control
 
 const int BUTTON_FWD_PIN = 2;
 const int BUTTON_BWD_PIN = 3;
@@ -39,13 +40,18 @@ DHT dht(DHT_PIN, DHTTYPE);
 
 // --- Servo ---
 Servo fanServo;
-bool fanActive = false;
+bool servoActive = false;
+int servoPos = 0;
+bool servoUp = true;
+unsigned long lastServoMs = 0;
+const unsigned long SERVO_DELAY_MS = 10;
 
 // --- Relés ---
 bool relayActiveLow = true;
 bool relayState1 = false;
 bool relayState2 = false;
 bool relayState3 = false;
+bool relayState4 = false;
 
 // --- Función para aplicar estado a los relés ---
 void applyRelay(int idx, bool on) {
@@ -53,6 +59,7 @@ void applyRelay(int idx, bool on) {
   if (idx == 0) pin = RELAY1_PIN;
   else if (idx == 1) pin = RELAY2_PIN;
   else if (idx == 2) pin = RELAY3_PIN;
+  else if (idx == 3) pin = RELAY4_PIN;
   else return;
 
   if (relayActiveLow) digitalWrite(pin, on ? LOW : HIGH);
@@ -83,7 +90,6 @@ int lastReadF = HIGH, lastReadB = HIGH;
 // --- MQ ---
 float mq1Avg = 0.0f, mq2Avg = 0.0f;
 const float MQ_ALPHA = 0.25f;
-const float MQ_THRESHOLD = 400.0f;
 unsigned long lastMqMs = 0;
 const unsigned long MQ_INTERVAL_MS = 1000;
 
@@ -91,10 +97,6 @@ const unsigned long MQ_INTERVAL_MS = 1000;
 Adafruit_INA219 ina219;
 unsigned long lastInaMs = 0;
 const unsigned long INA_INTERVAL_MS = 1000;
-float inaBusV = 0.0f;
-float inaCurrent_mA = 0.0f;
-float inaPower_mW = 0.0f;
-double energy_mWh = 0.0;
 bool inaInitialized = false;
 
 // --- Funciones auxiliares ---
@@ -119,14 +121,13 @@ void setup(){
   pinMode(RELAY1_PIN, OUTPUT);
   pinMode(RELAY2_PIN, OUTPUT);
   pinMode(RELAY3_PIN, OUTPUT);
+  pinMode(RELAY4_PIN, OUTPUT);
 
-  // Inicializar todos los relés apagados
-  relayState1 = false;
-  relayState2 = false;
-  relayState3 = false;
+  // Inicializar relés apagados
   applyRelay(0, relayState1);
   applyRelay(1, relayState2);
   applyRelay(2, relayState3);
+  applyRelay(3, relayState4);
 
   pinMode(BUTTON_FWD_PIN, INPUT_PULLUP);
   pinMode(BUTTON_BWD_PIN, INPUT_PULLUP);
@@ -172,7 +173,7 @@ void loop(){
   if ((now - lastDebounceF) > DEBOUNCE_MS) forward = (rf == LOW);
   if ((now - lastDebounceB) > DEBOUNCE_MS) backward = (rb == LOW);
 
-  // --- Solo permite mover si el relé 3 está activo ---
+  // Motor paso a paso solo si el relé 3 está activo
   if (relayState3) {
     if (forward && !backward) {
       if (now - lastStepMs >= stepDelayMs) {
@@ -187,6 +188,29 @@ void loop(){
     }
   }
 
+  // Movimiento del servo si relé 4 está activo
+  if (relayState4) {
+    if (!servoActive) {
+      fanServo.attach(SERVO_PIN);
+      servoActive = true;
+      Serial.println("Servo activado (movimiento continuo)");
+    }
+
+    if (now - lastServoMs >= SERVO_DELAY_MS) {
+      lastServoMs = now;
+      if (servoUp) servoPos++;
+      else servoPos--;
+      fanServo.write(servoPos);
+      if (servoPos >= 180) servoUp = false;
+      if (servoPos <= 0) servoUp = true;
+    }
+
+  } else if (servoActive) {
+    fanServo.detach();
+    servoActive = false;
+    Serial.println("Servo detenido");
+  }
+
   // --- Lectura MQ ---
   if (now - lastMqMs >= MQ_INTERVAL_MS){
     lastMqMs = now;
@@ -194,10 +218,8 @@ void loop(){
     int r2 = analogRead(MQ2_PIN);
     mq1Avg = (1.0f - MQ_ALPHA) * mq1Avg + MQ_ALPHA * (float)r1;
     mq2Avg = (1.0f - MQ_ALPHA) * mq2Avg + MQ_ALPHA * (float)r2;
-    float mqCombined = (mq1Avg + mq2Avg) * 0.5f;
     Serial.print("MQ1: "); Serial.print(mq1Avg);
-    Serial.print(" MQ2: "); Serial.print(mq2Avg);
-    Serial.print(" COMB: "); Serial.println(mqCombined);
+    Serial.print(" MQ2: "); Serial.println(mq2Avg);
 
     float h = dht.readHumidity();
     float t = dht.readTemperature();
@@ -211,12 +233,12 @@ void loop(){
   if (now - lastInaMs >= INA_INTERVAL_MS){
     lastInaMs = now;
     if (inaInitialized){
-      inaBusV = ina219.getBusVoltage_V();
-      inaCurrent_mA = ina219.getCurrent_mA();
-      inaPower_mW = ina219.getPower_mW();
-      Serial.print("V="); Serial.print(inaBusV);
-      Serial.print("V I="); Serial.print(inaCurrent_mA);
-      Serial.print("mA P="); Serial.print(inaPower_mW);
+      float V = ina219.getBusVoltage_V();
+      float I = ina219.getCurrent_mA();
+      float P = ina219.getPower_mW();
+      Serial.print("V="); Serial.print(V);
+      Serial.print("V I="); Serial.print(I);
+      Serial.print("mA P="); Serial.print(P);
       Serial.println("mW");
     }
   }
@@ -225,6 +247,7 @@ void loop(){
   if (Serial.available()){
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
+
     if (cmd == "1"){
       relayState1 = !relayState1;
       applyRelay(0, relayState1);
@@ -239,6 +262,11 @@ void loop(){
       relayState3 = !relayState3;
       applyRelay(2, relayState3);
       Serial.print("Relay3 -> "); Serial.println(relayState3 ? "ON" : "OFF");
+    } 
+    else if (cmd == "4"){
+      relayState4 = !relayState4;
+      applyRelay(3, relayState4);
+      Serial.print("Relay4 (Servo) -> "); Serial.println(relayState4 ? "ON" : "OFF");
     }
   }
 }
