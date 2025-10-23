@@ -80,7 +80,7 @@ const uint8_t STEPSEQ[8][4] = {
 
 int stepIdx = 0;
 unsigned long lastStepMs = 0;
-unsigned long stepDelayMs = 2;
+unsigned long stepDelayMs = 1;
 
 // --- Botones ---
 unsigned long lastDebounceF = 0, lastDebounceB = 0;
