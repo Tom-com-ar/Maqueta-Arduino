@@ -144,9 +144,11 @@ void setup(){
   dht.begin();
 
   if (!ina219.begin()) {
-    Serial.println("INA219 no encontrado");
+    Serial.println("Sensor de Electricidad | INA219 no encontrado");
   } else {
-    Serial.println("INA219 inicializado");
+    Serial.print("--------------------------------------------------\n");
+    Serial.println("Sensor de Electricidad | INA219 inicializado");
+    Serial.print("--------------------------------------------------\n");
     inaInitialized = true;
   }
 
@@ -193,7 +195,11 @@ void loop(){
     if (!servoActive) {
       fanServo.attach(SERVO_PIN);
       servoActive = true;
+      Serial.print("--------------------------------------------------\n");
       Serial.println("Servo activado (movimiento continuo)");
+      Serial.print("--------------------------------------------------\n");
+
+
     }
 
     if (now - lastServoMs >= SERVO_DELAY_MS) {
@@ -218,14 +224,19 @@ void loop(){
     int r2 = analogRead(MQ2_PIN);
     mq1Avg = (1.0f - MQ_ALPHA) * mq1Avg + MQ_ALPHA * (float)r1;
     mq2Avg = (1.0f - MQ_ALPHA) * mq2Avg + MQ_ALPHA * (float)r2;
-    Serial.print("MQ1: "); Serial.print(mq1Avg);
-    Serial.print(" MQ2: "); Serial.println(mq2Avg);
+    Serial.print("--------------------------------------------------\n");
+    Serial.print("Sensor de Gas | MQ1: "); Serial.print(mq1Avg);
+    Serial.print("Sensor de Gas | MQ2: "); Serial.println(mq2Avg);
+    Serial.print("--------------------------------------------------\n");
 
     float h = dht.readHumidity();
     float t = dht.readTemperature();
     if (!isnan(h) && !isnan(t)) {
-      Serial.print("DHT T: "); Serial.print(t);
-      Serial.print(" H: "); Serial.println(h);
+      Serial.print("--------------------------------------------------\n");
+      Serial.print("Sensor de Temperatura y Humedad | DHT");
+      Serial.print(" Temperatura: "); Serial.print(t);
+      Serial.print(" Humedad: "); Serial.println(h);
+      Serial.print("--------------------------------------------------\n");
     }
   }
 
